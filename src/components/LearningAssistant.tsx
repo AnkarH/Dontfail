@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Upload, FileText, BookOpen, MessageSquare, Highlighter, CheckCircle2, Send, Plus, Sparkles, Search, Camera, Image as ImageIcon } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { Upload, FileText, BookOpen, MessageSquare, Highlighter, CheckCircle2, Send, Plus, Sparkles, Search, Camera, Image as ImageIcon, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Progress } from './ui/progress';
@@ -7,17 +8,98 @@ import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { Textarea } from './ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Separator } from './ui/separator';
 
 export function LearningAssistant() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [question, setQuestion] = useState('');
   const [searchMode, setSearchMode] = useState<'smart' | 'ai'>('smart');
   
+  // 折叠控制
+  const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
+  const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+  
+  // 文档选择与预览
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedText, setSelectedText] = useState('');
+  
+  // 电影胶卷预览控制
+  const [showFilmstrip, setShowFilmstrip] = useState(false);
+  const hideTimeoutRef = useRef(null);
+  const filmstripRef = useRef(null);
+  
   const courseMaterials = [
-    { id: 1, name: '数据结构与算法-第三章.pdf', pages: 45, type: 'PDF', uploaded: '2025-10-20' },
-    { id: 2, name: '操作系统原理-课件.pptx', pages: 120, type: 'PPT', uploaded: '2025-10-18' },
-    { id: 3, name: '计算机网络-教材.docx', pages: 280, type: 'DOCX', uploaded: '2025-10-15' },
+    { id: 1, name: '数据结构与算法-第三章.pdf', pages: 45, type: 'PDF', uploaded: '2025-10-20', category: '课件' },
+    { id: 2, name: '操作系统原理-课件.pptx', pages: 120, type: 'PPT', uploaded: '2025-10-18', category: '课件' },
+    { id: 3, name: '计算机网络-教材.docx', pages: 280, type: 'DOCX', uploaded: '2025-10-15', category: '课本' },
   ];
+  
+  // 按分类组织材料
+  const allMaterials = useMemo(() => {
+    const categories = {};
+    courseMaterials.forEach(material => {
+      if (!categories[material.category]) {
+        categories[material.category] = [];
+      }
+      categories[material.category].push({
+        name: material.name,
+        pages: material.pages,
+        type: material.type
+      });
+    });
+    return Object.entries(categories).map(([type, items]) => ({ type, items }));
+  }, [courseMaterials]);
+  
+  const totalPages = selectedDoc?.pages ?? 0;
+  const filmstripPages = useMemo(() => {
+    if (!totalPages) return [];
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }, [totalPages]);
+  
+  // 延迟隐藏逻辑
+  const handleShowFilmstrip = () => {
+    if (!selectedDoc) return;
+    setShowFilmstrip(true);
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+  };
+
+  const handleHideFilmstrip = () => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+    }
+    hideTimeoutRef.current = setTimeout(() => {
+      setShowFilmstrip(false);
+      hideTimeoutRef.current = null;
+    }, 3000);
+  };
+  
+  // 点击空白处关闭缩略图
+  useEffect(() => {
+    if (!showFilmstrip) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filmstripRef.current && !filmstripRef.current.contains(e.target as Node)) {
+        setShowFilmstrip(false);
+        if (hideTimeoutRef.current) {
+          clearTimeout(hideTimeoutRef.current);
+          hideTimeoutRef.current = null;
+        }
+      }
+    };
+
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showFilmstrip]);
 
   const homeworkTasks = [
     { id: 1, title: '第三章练习题', total: 15, completed: 12, linked: true },
@@ -40,6 +122,8 @@ export function LearningAssistant() {
       timestamp: '10:23',
     },
   ]);
+  
+  const [uploadedImage, setUploadedImage] = useState(null);
 
   const handleFileUpload = () => {
     let progress = 0;
@@ -54,253 +138,418 @@ export function LearningAssistant() {
   };
 
   const handleSendQuestion = () => {
-    if (!question.trim()) return;
+    if (!question.trim() && !uploadedImage) return;
     
     const newMessage = {
       id: chatHistory.length + 1,
       type: 'user',
-      content: question,
+      content: question || '请帮我解答这道题目',
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     };
     
     setChatHistory([...chatHistory, newMessage]);
     setQuestion('');
+    setUploadedImage(null);
+    setSelectedText('');
 
     setTimeout(() => {
       const aiResponse = {
         id: chatHistory.length + 2,
         type: 'ai',
-        content: '正在分析您的问题，并从课件中查找相关内容...',
-        source: null,
+        content: searchMode === 'smart' 
+          ? `已在课件第${Math.floor(Math.random() * 50 + 1)}页找到相关内容。这个知识点在"${selectedDoc?.name || '课件'}"中有详细讲解。`
+          : selectedText
+          ? `关于"${selectedText}"的解释：\n\n这部分内容涉及到重要的核心概念。根据课件内容，建议你复习相关章节的基础知识。`
+          : '正在分析您的问题，并从课件中查找相关内容...',
+        source: selectedDoc ? { page: currentPage, file: selectedDoc.name } : null,
         timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       };
       setChatHistory(prev => [...prev, aiResponse]);
     }, 1000);
   };
+  
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setUploadedImage(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Left Side: Course Materials & Homework */}
-      <div className="lg:col-span-1 space-y-4">
-        {/* Course Material Management */}
-        <Card className="border-2 border-blue-100 bg-white/80 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-blue-600" />
-              课件管理
-            </CardTitle>
-            <CardDescription className="text-xs">上传课件/电子课本</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 transition-colors cursor-pointer">
-              <Upload className="w-8 h-8 mx-auto text-gray-400 mb-2" />
-              <p className="text-sm text-gray-600 mb-2">拖拽或点击上传</p>
-              <Button onClick={handleFileUpload} variant="outline" size="sm">
-                选择文件
+    <>
+    <div className="flex gap-4 h-[calc(100vh-12rem)] relative">
+      {/* 左侧可折叠：学习资料 */}
+      <div className={`relative transition-all duration-300 ${isLeftCollapsed ? 'w-0 -ml-2' : 'w-64'} flex-shrink-0`}>
+        {!isLeftCollapsed && (
+          <Card className="w-64 p-4 h-full overflow-hidden">
+            <div className="flex items-center justify-between mb-3">
+              <h3>学习资料</h3>
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setIsLeftCollapsed(true)}>
+                <ChevronLeft className="w-4 h-4" />
               </Button>
-              {uploadProgress > 0 && (
-                <div className="mt-3">
-                  <Progress value={uploadProgress} className="h-1" />
-                </div>
-              )}
             </div>
-
-            <ScrollArea className="h-[280px]">
-              <div className="space-y-2">
-                {courseMaterials.map((material) => (
-                  <div 
-                    key={material.id} 
-                    className="p-2 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                  >
-                    <div className="flex items-start gap-2 mb-1">
-                      <FileText className="w-4 h-4 text-blue-600 flex-shrink-0 mt-1" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-900 truncate">{material.name}</p>
-                        <p className="text-xs text-gray-500">
-                          {material.pages} 页 · {material.type}
-                        </p>
-                      </div>
+            <ScrollArea className="h-[calc(100%-3rem)] pr-2">
+              <div className="space-y-4">
+                {/* 上传区域 */}
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-3 text-center hover:border-blue-400 transition-colors cursor-pointer">
+                  <Upload className="w-6 h-6 mx-auto text-gray-400 mb-2" />
+                  <p className="text-xs text-gray-600 mb-2">上传课件</p>
+                  <Button onClick={handleFileUpload} variant="outline" size="sm" className="h-7 text-xs">
+                    选择文件
+                  </Button>
+                  {uploadProgress > 0 && (
+                    <div className="mt-2">
+                      <Progress value={uploadProgress} className="h-1" />
                     </div>
-                    <div className="flex gap-1 mt-1">
-                      <Button variant="ghost" size="sm" className="h-7 text-xs px-2">
-                        <BookOpen className="w-3 h-3 mr-1" />
-                        预览
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 text-xs px-2">
-                        <Highlighter className="w-3 h-3 mr-1" />
-                        标注
-                      </Button>
+                  )}
+                </div>
+                
+                {/* 材料列表 */}
+                {allMaterials.map((category) => (
+                  <div key={category.type}>
+                    <p className="text-sm text-gray-600 mb-2">{category.type}</p>
+                    <div className="space-y-1">
+                      {category.items.map((item, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            setSelectedDoc({ type: category.type, name: item.name, pages: item.pages });
+                            setCurrentPage(1);
+                          }}
+                          className={`w-full text-left p-2 rounded-lg text-sm transition-colors ${
+                            selectedDoc?.name === item.name
+                              ? 'bg-blue-100 text-blue-700'
+                              : 'hover:bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileText className="w-4 h-4" />
+                            <div className="flex-1 truncate">
+                              <p className="truncate">{item.name}</p>
+                              <p className="text-xs text-gray-500">{item.pages} 页</p>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
                     </div>
+                    {category !== allMaterials[allMaterials.length - 1] && (
+                      <Separator className="my-3" />
+                    )}
                   </div>
                 ))}
               </div>
             </ScrollArea>
-          </CardContent>
-        </Card>
-
-        {/* Homework Correlation */}
-        <Card className="border-2 border-purple-100 bg-white/80 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-purple-600" />
-              作业题关联
-            </CardTitle>
-            <CardDescription className="text-xs">AI匹配题目与课件</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {homeworkTasks.map((task) => (
-                <div key={task.id} className="p-2 bg-gray-50 rounded-lg">
-                  <div className="flex items-start justify-between mb-1">
-                    <p className="text-sm text-gray-900">{task.title}</p>
-                    {task.linked && (
-                      <Badge variant="secondary" className="bg-green-100 text-green-700 text-xs h-5">
-                        已关联
-                      </Badge>
-                    )}
-                  </div>
-                  <Progress 
-                    value={(task.completed / task.total) * 100} 
-                    className="h-1 mb-1"
-                  />
-                  <p className="text-xs text-gray-500">
-                    {task.completed} / {task.total} 已完成
-                  </p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+          </Card>
+        )}
+        {isLeftCollapsed && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="absolute top-3 -right-2 z-10 rounded-r-none"
+            onClick={() => setIsLeftCollapsed(false)}
+          >
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+        )}
       </div>
 
-      {/* Right Side: AI Chat */}
-      <Card className="lg:col-span-2 border-2 border-green-100 bg-white/80 backdrop-blur-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-green-600" />
-            AI答疑助手
-          </CardTitle>
-          <CardDescription>基于课件内容的智能问答 · 支持OCR图片识别</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* Search Mode Buttons */}
-          <div className="flex gap-2">
+      {/* 中间：AI 答疑 */}
+      <Card className="flex-1 p-4 flex flex-col">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="flex items-center gap-2">
+            <MessageSquare className="w-5 h-5" />
+            AI 答疑
+          </h3>
+          <div className="flex gap-1">
             <Button
-              variant={searchMode === 'smart' ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setSearchMode('smart')}
-              className="h-8"
-            >
-              <Search className="w-3 h-3 mr-1" />
-              智能检索
-            </Button>
-            <Button
-              variant={searchMode === 'ai' ? 'default' : 'outline'}
-              size="sm"
+              variant={searchMode === 'ai' ? 'default' : 'ghost'}
               onClick={() => setSearchMode('ai')}
-              className="h-8"
+              className="h-7 px-2 text-xs"
             >
               <Sparkles className="w-3 h-3 mr-1" />
               AI生成
             </Button>
-            <div className="ml-auto text-xs text-gray-500 flex items-center">
-              {searchMode === 'smart' ? '优先使用课件内容' : '无匹配时生成解答'}
-            </div>
-          </div>
-
-          {/* Chat History */}
-          <ScrollArea className="h-[500px] pr-2">
-            <div className="space-y-3">
-              {chatHistory.map((message) => (
-                <div 
-                  key={message.id}
-                  className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div className={`max-w-[80%] ${message.type === 'user' ? 'order-1' : ''}`}>
-                    <div className={`p-3 rounded-lg ${
-                      message.type === 'user' 
-                        ? 'bg-blue-600 text-white' 
-                        : 'bg-gray-100 text-gray-900'
-                    }`}>
-                      <p className="whitespace-pre-wrap text-sm">{message.content}</p>
-                      {message.source && (
-                        <div className="mt-2 pt-2 border-t border-gray-300">
-                          <Badge variant="secondary" className="bg-white/20 text-xs">
-                            📄 {message.source.file} · P{message.source.page}
-                          </Badge>
-                        </div>
-                      )}
-                    </div>
-                    <p className={`text-xs text-gray-500 mt-1 ${
-                      message.type === 'user' ? 'text-right' : 'text-left'
-                    }`}>
-                      {message.timestamp}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </ScrollArea>
-
-          {/* Input Area */}
-          <div className="flex gap-2">
-            <Textarea
-              placeholder="输入您的问题..."
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendQuestion();
-                }
-              }}
-              className="min-h-[60px] resize-none"
-            />
-            <div className="flex flex-col gap-2">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="icon" className="h-[60px] w-12">
-                    <Plus className="w-5 h-5" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-48" align="end">
-                  <div className="space-y-2">
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start"
-                      size="sm"
-                      onClick={handleFileUpload}
-                    >
-                      <Camera className="w-4 h-4 mr-2" />
-                      拍照提问
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start"
-                      size="sm"
-                      onClick={handleFileUpload}
-                    >
-                      <ImageIcon className="w-4 h-4 mr-2" />
-                      上传图片
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-            <Button 
-              onClick={handleSendQuestion}
-              disabled={!question.trim()}
-              className="h-[60px] px-6"
+            <Button
+              size="sm"
+              variant={searchMode === 'smart' ? 'default' : 'ghost'}
+              onClick={() => setSearchMode('smart')}
+              className="h-7 px-2 text-xs"
             >
-              <Send className="w-4 h-4" />
+              <Search className="w-3 h-3 mr-1" />
+              智能检索
             </Button>
           </div>
+        </div>
 
-          <div className="text-xs text-gray-500">
-            💡 按 Enter 发送，Shift + Enter 换行 · 点击 + 号上传图片或拍照
+        {/* Chat Messages */}
+        <ScrollArea className="flex-1 pr-4 mb-4">
+          <div className="space-y-4">
+            {chatHistory.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-8">
+                <p>选中文档内容或上传题目图片</p>
+                <p className="mt-2">开始向AI提问</p>
+              </div>
+            ) : (
+              chatHistory.map((message) => (
+                <div
+                  key={message.id}
+                  className={`${
+                    message.type === 'user'
+                      ? 'bg-blue-100 text-blue-900 ml-8'
+                      : 'bg-gray-100 text-gray-900 mr-8'
+                  } p-3 rounded-lg text-sm whitespace-pre-wrap`}
+                >
+                  {message.content}
+                  {message.source && (
+                    <div className="mt-2 pt-2 border-t border-gray-300">
+                      <Badge variant="secondary" className="bg-white/20 text-xs">
+                        📄 {message.source.file} · P{message.source.page}
+                      </Badge>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
           </div>
-        </CardContent>
+        </ScrollArea>
+
+        {/* Image Preview */}
+        {uploadedImage && (
+          <div className="mb-3 relative">
+            <img
+              src={uploadedImage}
+              alt="Uploaded"
+              className="w-full h-32 object-cover rounded-lg border"
+            />
+            <Button
+              size="sm"
+              variant="destructive"
+              className="absolute top-2 right-2 h-6 w-6 p-0"
+              onClick={() => setUploadedImage(null)}
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
+
+        {/* Input Area */}
+        <div className="space-y-2">
+          <Textarea
+            placeholder={
+              selectedText
+                ? `关于"${selectedText.slice(0, 20)}..."的问题`
+                : '输入你的问题或上传题目图片...'
+            }
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            className="min-h-[80px] resize-none"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSendQuestion();
+              }
+            }}
+          />
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              id="chat-image-upload"
+              accept="image/*"
+              onChange={handleImageUpload}
+              className="hidden"
+            />
+            <label htmlFor="chat-image-upload">
+              <Button size="sm" variant="outline" className="cursor-pointer" asChild>
+                <span>
+                  <ImageIcon className="w-4 h-4 mr-2" />
+                  上传题目
+                </span>
+              </Button>
+            </label>
+            <Button size="sm" onClick={handleSendQuestion} className="flex-1">
+              发送
+            </Button>
+          </div>
+        </div>
       </Card>
+
+      {/* 右侧可折叠：预览区 */}
+      <div className={`relative transition-all duration-300 ${isRightCollapsed ? 'w-0 -mr-2' : 'w-[40%] min-w-[320px]'} flex-shrink-0`}>
+        {!isRightCollapsed && (
+          <Card className="p-4 h-full overflow-hidden relative">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 absolute top-3 -left-2 z-10 rounded-l-none"
+              onClick={() => setIsRightCollapsed(true)}
+              title="隐藏预览"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+
+            {selectedDoc ? (
+              <div className="h-full flex flex-col">
+                <div className="flex items-center justify-between mb-4 pl-4 pr-2">
+                  <div>
+                    <h3 className="flex items-center gap-2">
+                      <Badge variant="secondary">{selectedDoc.type}</Badge>
+                      {selectedDoc.name}
+                    </h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      第 {currentPage} / {selectedDoc.pages} 页
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setCurrentPage(Math.min(selectedDoc.pages, currentPage + 1));
+                        handleShowFilmstrip();
+                      }}
+                      onMouseEnter={handleShowFilmstrip}
+                      onMouseLeave={handleHideFilmstrip}
+                      disabled={currentPage === selectedDoc.pages}
+                      title="下一页"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Document Preview Area */}
+                <div 
+                  className="flex-1 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center relative overflow-hidden"
+                  onMouseUp={() => {
+                    const selection = window.getSelection()?.toString();
+                    if (selection) {
+                      setSelectedText(selection);
+                    }
+                  }}
+                  onMouseEnter={handleShowFilmstrip}
+                  onMouseLeave={handleHideFilmstrip}
+                >
+                  <div className="text-center p-8">
+                    <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <p className="text-gray-600 mb-2">{selectedDoc.name}</p>
+                    <p className="text-sm text-gray-500">第 {currentPage} 页预览</p>
+                    <p className="text-xs text-gray-400 mt-4">选中文字可以直接提问</p>
+                  </div>
+                </div>
+
+                {selectedText && (
+                  <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="text-xs text-blue-600 mb-1">已选中内容：</p>
+                        <p className="text-sm text-gray-700">{selectedText}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSelectedText('')}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center text-gray-400">
+                <div className="text-center">
+                  <FileText className="w-20 h-20 mx-auto mb-4" />
+                  <p>请从左侧选择要预览的文档</p>
+                </div>
+              </div>
+            )}
+          </Card>
+        )}
+        {isRightCollapsed && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="absolute top-3 -left-2 z-10 rounded-l-none"
+            onClick={() => setIsRightCollapsed(false)}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+        )}
+      </div>
     </div>
+
+    {/* 电影胶卷式预览条（固定在页面底部，横跨整个页面，顶层显示） */}
+    {(() => {
+      const shouldShow = showFilmstrip && selectedDoc && filmstripPages.length > 0;
+      return shouldShow && typeof document !== 'undefined' && document.body && createPortal(
+      <div
+        ref={filmstripRef}
+        className="fixed left-0 right-0 bottom-0 bg-white backdrop-blur-sm border-t border-gray-300 shadow-lg z-[9999]"
+        onMouseEnter={handleShowFilmstrip}
+        onMouseLeave={handleHideFilmstrip}
+        onClick={(e) => e.stopPropagation()}
+        style={{ 
+          display: 'block',
+          opacity: 1,
+          visibility: 'visible',
+          zIndex: 9999,
+          position: 'fixed',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: '150px',
+          width: '100%'
+        }}
+      >
+        <div className="h-full overflow-x-auto overflow-y-hidden">
+          <div className="flex items-center gap-3 px-4 py-4 h-full">
+            {filmstripPages.map((p) => (
+              <button
+                key={p}
+                onClick={() => {
+                  setCurrentPage(p);
+                  handleShowFilmstrip();
+                }}
+                className={`flex-shrink-0 rounded-lg border-2 transition-all ${
+                  p === currentPage 
+                    ? 'border-blue-500 ring-2 ring-blue-200 shadow-md scale-105' 
+                    : 'border-gray-300 hover:border-blue-400 hover:shadow'
+                } bg-gray-100 hover:scale-105 relative overflow-hidden`}
+                style={{
+                  width: '120px',
+                  height: '120px',
+                  minWidth: '120px',
+                  minHeight: '120px'
+                }}
+                title={`第 ${p} 页`}
+              >
+                <span className="absolute top-2 left-2 text-xs px-2 py-1 rounded bg-black/70 text-white font-semibold z-10">
+                  {p}
+                </span>
+                <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
+                  预览
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>,
+      document.body
+      );
+    })()}
+    </>
   );
 }

@@ -35,6 +35,7 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
   // 电影胶卷预览控制
   const [showFilmstrip, setShowFilmstrip] = useState(false);
   const hideTimeoutRef = useRef(null);
+  const filmstripRef = useRef(null);
 
   const allMaterials = [
     { type: '课件', items: materials.courseware },
@@ -51,6 +52,8 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
 
   // 延迟隐藏逻辑
   const handleShowFilmstrip = () => {
+    if (!selectedDoc) return; // 确保有选中的文档
+    console.log('显示缩略图', { showFilmstrip, selectedDoc, totalPages, filmstripPages: filmstripPages.length });
     setShowFilmstrip(true);
     if (hideTimeoutRef.current) {
       clearTimeout(hideTimeoutRef.current);
@@ -87,6 +90,32 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // 点击空白处关闭缩略图
+  useEffect(() => {
+    if (!showFilmstrip) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filmstripRef.current && !filmstripRef.current.contains(e.target as Node)) {
+        // 点击在缩略图外部，关闭缩略图
+        setShowFilmstrip(false);
+        if (hideTimeoutRef.current) {
+          clearTimeout(hideTimeoutRef.current);
+          hideTimeoutRef.current = null;
+        }
+      }
+    };
+
+    // 延迟添加监听器，避免立即触发
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showFilmstrip]);
 
   const handleSendMessage = () => {
     if (!inputMessage.trim() && !uploadedImage) return;
@@ -338,21 +367,20 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </Button>
-                    <div
-                      className="inline-flex"
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setCurrentPage(Math.min(selectedDoc.pages, currentPage + 1));
+                        handleShowFilmstrip();
+                      }}
                       onMouseEnter={handleShowFilmstrip}
                       onMouseLeave={handleHideFilmstrip}
+                      disabled={currentPage === selectedDoc.pages}
+                      title="下一页"
                     >
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setCurrentPage(Math.min(selectedDoc.pages, currentPage + 1))}
-                        disabled={currentPage === selectedDoc.pages}
-                        title="下一页"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </Button>
-                    </div>
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
                   </div>
                 </div>
 
@@ -365,6 +393,8 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
                       setSelectedText(selection);
                     }
                   }}
+                  onMouseEnter={handleShowFilmstrip}
+                  onMouseLeave={handleHideFilmstrip}
                 >
                   <div className="text-center p-8">
                     <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
@@ -415,15 +445,32 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
       </div>
     </div>
 
-    {/* 电影胶卷式预览条（固定在页面底部，Portal 渲染） */}
-    {showFilmstrip && selectedDoc && createPortal(
+    {/* 电影胶卷式预览条（固定在页面底部，横跨整个页面，顶层显示） */}
+    {(() => {
+      const shouldShow = showFilmstrip && selectedDoc && filmstripPages.length > 0;
+      console.log('Portal 渲染检查', { showFilmstrip, selectedDoc: !!selectedDoc, filmstripPagesLength: filmstripPages.length, shouldShow });
+      return shouldShow && typeof document !== 'undefined' && document.body && createPortal(
       <div
-        className="fixed left-0 right-0 bottom-0 h-28 bg-white/95 backdrop-blur-sm border-t border-gray-300 shadow-lg z-[9999] transition-opacity duration-300"
+        ref={filmstripRef}
+        className="fixed left-0 right-0 bottom-0 bg-white backdrop-blur-sm border-t border-gray-300 shadow-lg z-[9999]"
         onMouseEnter={handleShowFilmstrip}
         onMouseLeave={handleHideFilmstrip}
+        onClick={(e) => e.stopPropagation()}
+        style={{ 
+          display: 'block',
+          opacity: 1,
+          visibility: 'visible',
+          zIndex: 9999,
+          position: 'fixed',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: '150px',
+          width: '100%'
+        }}
       >
         <div className="h-full overflow-x-auto overflow-y-hidden">
-          <div className="flex items-center gap-3 px-4 py-3 h-full">
+          <div className="flex items-center gap-3 px-4 py-4 h-full">
             {filmstripPages.map((p) => (
               <button
                 key={p}
@@ -431,11 +478,17 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
                   setCurrentPage(p);
                   handleShowFilmstrip();
                 }}
-                className={`flex-shrink-0 w-28 h-20 rounded-lg border-2 transition-all ${
+                className={`flex-shrink-0 rounded-lg border-2 transition-all ${
                   p === currentPage 
                     ? 'border-blue-500 ring-2 ring-blue-200 shadow-md scale-105' 
                     : 'border-gray-300 hover:border-blue-400 hover:shadow'
                 } bg-gray-100 hover:scale-105 relative overflow-hidden`}
+                style={{
+                  width: '120px',
+                  height: '120px',
+                  minWidth: '120px',
+                  minHeight: '120px'
+                }}
                 title={`第 ${p} 页`}
               >
                 <span className="absolute top-2 left-2 text-xs px-2 py-1 rounded bg-black/70 text-white font-semibold z-10">
@@ -450,7 +503,8 @@ export function ExamDocReader({ examName, materials }: ExamDocReaderProps) {
         </div>
       </div>,
       document.body
-    )}
+      );
+    })()}
     </>
   );
 }
